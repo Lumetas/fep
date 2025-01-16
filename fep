@@ -1,20 +1,16 @@
 #!/bin/bash
-# Функция для открытия файла
-# BACKPATH=$PATH;
-# PATH="";
-file_to_include="$HOME/.config/fep/start";
+file_to_include="$HOME/.config/fep/start"
 if [[ -f "$file_to_include" ]]; then
-    source "$file_to_include";
+    source "$file_to_include"
 fi
 
-insertx=0;
-inserty=0;
-
+insertx=0
+inserty=0
 
 remove_char() {
-    local line_number="$1"   # Номер строки (начиная с нуля)
+    local line_number="$1"    # Номер строки (начиная с нуля)
     local char_position="$2"  # Позиция символа в строке (начиная с нуля)
-    local file="$3"          # Имя файла, в котором будет производиться операция
+    local file="$3"           # Имя файла, в котором будет производиться операция
     local temp_file=$(mktemp) # Создаем временный файл
 
     # Читаем файл построчно
@@ -30,24 +26,23 @@ remove_char() {
             fi
             # Удаляем символ
             modified_line="${line:0:char_position}${line:char_position+1}"
-            echo "$modified_line" >> "$temp_file"  # Записываем изменённую строку во временный файл
+            echo "$modified_line" >>"$temp_file" # Записываем изменённую строку во временный файл
         else
-            echo "$line" >> "$temp_file"  # Записываем строки без изменений во временный файл
+            echo "$line" >>"$temp_file" # Записываем строки без изменений во временный файл
         fi
-        
-        ((current_line++))  # Переходим к следующей строке
-    done < "$file"  # Читаем данные из файла
+
+        ((current_line++)) # Переходим к следующей строке
+    done <"$file"          # Читаем данные из файла
 
     # Заменяем оригинальный файл на временный
     mv "$temp_file" "$file"
 }
 
-
 replace_char_in_line() {
-	local new_char="$1"      # Новый символ для замены или добавления
-    local line_number="$2"   # Номер строки (начиная с нуля)
+    local new_char="$1"       # Новый символ для замены или добавления
+    local line_number="$2"    # Номер строки (начиная с нуля)
     local char_position="$3"  # Позиция символа в строке (начиная с нуля)
-    local file="$4"          # Имя файла, в котором будет производиться операция
+    local file="$4"           # Имя файла, в котором будет производиться операция
     local temp_file=$(mktemp) # Создаем временный файл
 
     # Читаем файл построчно
@@ -67,21 +62,21 @@ replace_char_in_line() {
                 # Заменяем символ
                 modified_line="${line:0:char_position}${new_char}${line:char_position+1}"
             fi
-            echo "$modified_line" >> "$temp_file"  # Записываем изменённую строку во временный файл
+            echo "$modified_line" >>"$temp_file" # Записываем изменённую строку во временный файл
         else
-            echo "$line" >> "$temp_file"  # Записываем строки без изменений во временный файл
+            echo "$line" >>"$temp_file" # Записываем строки без изменений во временный файл
         fi
-        
-        ((current_line++))  # Переходим к следующей строке
-    done < "$file"  # Читаем данные из файла
+
+        ((current_line++)) # Переходим к следующей строке
+    done <"$file"          # Читаем данные из файла
 
     # Заменяем оригинальный файл на временный
     mv "$temp_file" "$file"
 }
 
 highlight_char() {
-    local index="$1"  # Индекс символа, который нужно окрасить
-    shift             # Сдвиг аргументов, остальные будут строкой
+    local index="$1" # Индекс символа, который нужно окрасить
+    shift            # Сдвиг аргументов, остальные будут строкой
 
     # Объединяем оставшиеся аргументы в одну строку
     local string="$*"
@@ -93,7 +88,7 @@ highlight_char() {
 
     # Проверка на случай выхода за пределы строки на 1
     if [ "$index" -eq "${#string}" ]; then
-        local red_square='■'  # Символ квадрат 
+        local red_square='■' # Символ квадрат
         local red='\033[0;31m'
         local reset='\033[0m'
         echo -e "${string}${red}${red_square}${reset}"
@@ -105,7 +100,7 @@ highlight_char() {
 
     # Проверяем, является ли символ пробелом
     if [ "$char_to_highlight" == " " ]; then
-        char_to_highlight='■'  # Заменяем пробел на квадрат
+        char_to_highlight='■' # Заменяем пробел на квадрат
     fi
 
     # Цвет для красного
@@ -118,7 +113,6 @@ highlight_char() {
     # Выводим результат
     echo -e "$highlighted_string"
 }
-
 
 delete_lines() {
     local file="$1"
@@ -155,31 +149,31 @@ function edit_range {
         # Формат "X." - вставка многострочного текста после строки X
         local line_number=${BASH_REMATCH[1]}
         # echo "Введите многострочный текст (Ctrl+D для окончания ввода):"
-        new_text=$(cat)  # Читаем весь ввод до Ctrl+D
+        new_text=$(cat) # Читаем весь ввод до Ctrl+D
 
         # Вставляем все строки по отдельности
-        IFS=$'\n'       # Задаем разделитель как новая строка
+        IFS=$'\n' # Задаем разделитель как новая строка
         for line in $new_text; do
             sed -i "${line_number}a $line" "$file"
-            line_number=$((line_number + 1))  # Увеличиваем номер строки для добавления
+            line_number=$((line_number + 1)) # Увеличиваем номер строки для добавления
         done
 
     elif [[ $range =~ ^([0-9]+)\.\.$ ]]; then
         # Формат "X.." - вставка многострочного текста перед строкой X
         local start=${BASH_REMATCH[1]}
         # echo "Введите многострочный текст (Ctrl+D для окончания ввода):"
-        new_text=$(cat)  # Читаем весь ввод до Ctrl+D 
+        new_text=$(cat) # Читаем весь ввод до Ctrl+D
 
         if [[ $replace_mode == true ]]; then
             # Вставляем все строки по отдельности
-            IFS=$'\n'       # Задаем разделитель как новая строка
+            IFS=$'\n' # Задаем разделитель как новая строка
             for line in $new_text; do
                 sed -i "${start}i $line" "$file"
-                start=$((start + 1))  # Увеличиваем номер строки для добавления
+                start=$((start + 1)) # Увеличиваем номер строки для добавления
             done
         else
             # echo "Текущая строка ${start}: $(sed -n "${start}p" "$file")"
-      echo;
+            echo
         fi
 
     elif [[ $range =~ ^([0-9]+)\.\.([0-9]+)$ ]]; then
@@ -190,22 +184,22 @@ function edit_range {
         if [[ -f $file ]]; then
             if [[ $replace_mode == true ]]; then
                 # echo "Введите многострочный текст (Ctrl+D для окончания ввода):"
-                new_text=$(cat)  # Читаем весь ввод до Ctrl+D
+                new_text=$(cat) # Читаем весь ввод до Ctrl+D
 
                 # Удаляем строки от start до end
                 sed -i "${start},${end}d" "$file"
 
                 # Вставляем новый текст на место удаленных строк
-                IFS=$'\n'       # Задаем разделитель как новая строка
+                IFS=$'\n' # Задаем разделитель как новая строка
                 for line in $new_text; do
                     sed -i "${start}i $line" "$file"
-                    start=$((start + 1))  # Увеличиваем номер строки для добавления
+                    start=$((start + 1)) # Увеличиваем номер строки для добавления
                 done
 
                 # echo "Строки от $start до $end удалены, и новый текст вставлен."
             else
                 # Вывод строк от start до end
-                sed -n "${start},${end}p" "$file"  # Выводим строки от start до end
+                sed -n "${start},${end}p" "$file" # Выводим строки от start до end
             fi
         else
             echo "Файл '$file' не найден."
@@ -215,12 +209,12 @@ function edit_range {
         # Простое число - замена строки
         local line_number=$range
         # echo "Введите новый текст (для замены строки):"
-        new_text=$(cat)   # Читаем весь ввод до Ctrl+D
-        
+        new_text=$(cat) # Читаем весь ввод до Ctrl+D
+
         # Для замены строки используем здесь c вместо s
         # и обрабатываем многострочный текст по строкам
         IFS=$'\n'
-        tmp_file=$(mktemp)  # Создаем временный файл
+        tmp_file=$(mktemp) # Создаем временный файл
         {
             # Сначала выводим строки до нужной
             sed -n "0,$((line_number - 1))p" "$file"
@@ -229,7 +223,7 @@ function edit_range {
             echo "$new_text"
             # Затем выводим остальные строки
             sed -n "$((line_number + 1)),\$p" "$file"
-        } > "$tmp_file"
+        } >"$tmp_file"
 
         # Заменяем оригинальный файл временным
         mv "$tmp_file" "$file"
@@ -240,138 +234,136 @@ function edit_range {
 }
 
 openFile() {
-    mapfile -t content < "$1"  # Читаем файл в массив
+    mapfile -t content <"$1" # Читаем файл в массив
+    lineCount=${#content[@]}
     return 0
 }
 
 search() {
-  read;
-  string=$(grep -n "$REPLY" $1 | head -n 1 | cut -d: -f1); 
-    echo $(( $string - 1 ));
+    read
+    string=$(grep -n "$REPLY" $1 | head -n 1 | cut -d: -f1)
+    echo $(($string - 1))
 }
 
+rewrite() {
 
-rewrite () {
+    clear # Вывод строк
 
-        clear # Вывод строк
+    current_string="${content[inserty]}"
+    current_string_length=${#current_string}
 
-		current_string="${content[inserty]}";
-		current_string_length=${#current_string};
-		
-		if [[ $current_string_length -lt $insertx ]]; then insertx=$current_string_length; fi
+    if [[ $current_string_length -lt $insertx ]]; then insertx=$current_string_length; fi
 
-        for ((i = startLine; i < startLine + linesPerPage && i < lineCount; i++)); do
-			if [[ $i == $inserty ]]; then echo "$(( $i + 1 )): $(highlight_char $insertx "${content[i]}")";
-			else echo "$(( $i + 1 )): ${content[i]}"; fi
+    for ((i = startLine; i < startLine + linesPerPage && i < lineCount; i++)); do
+        if [[ $i == $inserty ]]; then
+            echo "$(($i + 1)): $(highlight_char $insertx "${content[i]}")"
+        else echo "$(($i + 1)): ${content[i]}"; fi
 
-      linesPerPage=$(( $(tput lines) - 2 ))
-        done
+        linesPerPage=$(($(tput lines) - 2))
+    done
 
 }
 
-saveFile () {
-	mv $file $1;
+saveFile() {
+    mv $file $1
 }
 
 # Основной текстовый редактор
 main() {
-	file=mktemp;
-	mv $1 $file;
-	cp $file $1;
-    openFile "$file" || return  # Открываем файл
-    lineCount=${#content[@]}
+    file=mktemp
+    mv $1 $file
+    cp $file $1
+    openFile "$file" || return # Открываем файл
+
     startLine=0
-    linesPerPage=$(( $(tput lines) - 2 ))  # Количество строк, выводимых за раз
-  
+    linesPerPage=$(($(tput lines) - 2)) # Количество строк, выводимых за раз
+    norewrite=0
 
-
-
-  
     while true; do
 
-		file_to_include="$HOME/.config/fep/startiter";
-		if [[ -f "$file_to_include" ]]; then
-			source "$file_to_include";
-		fi
+        file_to_include="$HOME/.config/fep/startiter"
+        if [[ -f "$file_to_include" ]]; then
+            source "$file_to_include"
+        fi
         # Очистка терминала
-		rewrite;        
+        if [[ $norewrite == "0" ]]; then
+            rewrite
+        fi
+        norewrite=1
         # Управление
-        read -rsn1 input  # Ожидание ввода одного символа
+        read -rsn1 input # Ожидание ввода одного символа
 
         # Обработка ввода
 
+        file_to_include="$HOME/.config/fep/enditer"
+        if [[ -f "$file_to_include" ]]; then
+            source "$file_to_include"
+        fi
 
+        if [[ "$input" == "q" ]]; then break; fi
+        if [[ "$input" == "J" ]]; then ((startLine++)) && ((startLine >= lineCount)) && startLine=$((lineCount - 1)); fi
+        if [[ "$input" == "K" ]]; then if [[ $startLine != "0" ]]; then startLine=$(($startLine - 1)); else continue; fi; fi
+        if [[ "$input" == ":" ]]; then commandMode; fi
+        if [[ "$input" == "/" ]]; then startLine=$(search "$file"); fi
+        if [[ "$input" == "e" ]]; then edit $file $startLine && lineCount=${#content[@]}; fi
+        if [[ "$input" == "d" ]]; then del $file && lineCount=${#content[@]}; fi
+        if [[ $input == h ]]; then if [[ $insertx != 0 ]]; then insertx=$(($insertx - 1)); else continue; fi; fi
+        if [[ $input == l ]]; then if [[ $current_string_length -gt $insertx ]]; then insertx=$(($insertx + 1)); else continue; fi; fi
+        if [[ $input == j ]]; then if [[ $inserty != $((lineCount - 1)) ]]; then inserty=$(($inserty + 1)); else continue; fi; fi
+        if [[ $input == k ]]; then if [[ $inserty != "0" ]]; then inserty=$(($inserty - 1)); else continue; fi; fi
+        if [[ $input == i ]]; then insertMode $file; fi
+        if [[ $input == D ]]; then removeModer $file; fi
+        if [[ $input == w ]]; then saveFile $1; fi
 
-
-		file_to_include="$HOME/.config/fep/enditer";
-		if [[ -f "$file_to_include" ]]; then
-		    source "$file_to_include";
-		fi
-
-
-		if [[ "$input" == "q" ]]; then break; fi
-		if [[ "$input" == "J" ]]; then ((startLine++)) && ((startLine >= lineCount)) && startLine=$((lineCount - 1)); fi 
-		if [[ "$input" == "K" ]]; then ((startLine--)) && ((startLine < 0)) && startLine=0; fi 
-		if [[ "$input" == ":" ]]; then commandMode; fi 
-		if [[ "$input" == "/" ]]; then startLine=$(search "$file"); fi 
-		if [[ "$input" == "e" ]]; then edit $file $startLine && lineCount=${#content[@]}; fi 
-		if [[ "$input" == "d" ]]; then del $file && lineCount=${#content[@]}; fi 
-		if [[ $input == h ]]; then if [[ $insertx != 0 ]]; then insertx=$(($insertx - 1)); fi; fi
-		if [[ $input == l ]]; then if [[ $current_string_length -gt $insertx ]]; then insertx=$(($insertx + 1)); fi; fi
-		if [[ $input == j ]]; then inserty=$(($inserty + 1)); fi
-		if [[ $input == k ]]; then inserty=$(($inserty - 1)); fi
-		if [[ $input == i ]]; then insertMode $file; fi
-		if [[ $input == D ]]; then removeModer $file; fi
-		if [[ $input == w ]]; then saveFile $1; fi
+        norewrite=0
 
     done
 }
 
-
-del () {
-read;
-delete_lines $1 $REPLY;
-openFile $1;
+del() {
+    read
+    delete_lines $1 $REPLY
+    openFile $1
 }
 
 insertMode() {
-	while true; do
-		read -rsn1 input;
-		if [[ "$input" == "" ]]; then input=" "; fi
-		if [[ "$input" != *$(printf '\e')* ]]; then
-			replace_char_in_line "$input" "$inserty" "$insertx" "$1";
-			openFile $1;
-			# insertx=$(insertx + 1);
-			if [[ $current_string_length -gt $(($insertx - 1)) ]]; then insertx=$(($insertx + 1)); fi
-			rewrite;
-			echo $input >> log
-		else
-			break;
-		fi
-	done;
+    while true; do
+        read -rsn1 input
+        if [[ "$input" == "" ]]; then input=" "; fi
+        if [[ "$input" != *$(printf '\e')* ]]; then
+            replace_char_in_line "$input" "$inserty" "$insertx" "$1"
+            openFile $1
+            # insertx=$(insertx + 1);
+            if [[ $current_string_length -gt $(($insertx - 1)) ]]; then insertx=$(($insertx + 1)); fi
+            rewrite
+            echo $input >>log
+        else
+            break
+        fi
+    done
 }
 
 edit() {
-  read;
-  range=$REPLY;
-  # if [[ $range == "1" ]]; then range="0"; fi
-  clear;
-  edit_range $range $1 true;
-  openFile $1;
-  
+    read
+    range=$REPLY
+    # if [[ $range == "1" ]]; then range="0"; fi
+    clear
+    edit_range $range $1 true
+    openFile $1
+
 }
 
-removeModer(){
-	remove_char $inserty $insertx $1;
-	openFile $1;
-	if [[ $insertx != 0 ]]; then insertx=$(($insertx - 1)); fi
-	rewrite;
+removeModer() {
+    remove_char $inserty $insertx $1
+    openFile $1
+    if [[ $insertx != 0 ]]; then insertx=$(($insertx - 1)); fi
+    rewrite
 }
 
 commandMode() {
-read;
-$REPLY;
-sleep 1;
+    read
+    $REPLY
+    sleep 1
 }
 
 # Проверка аргументов командной строки
@@ -380,24 +372,23 @@ if [[ $# -lt 1 ]]; then
     exit 1
 fi
 
-
 # Запуск редактора с указанным файлом
 
-
-    if [[ ! -f "$1" ]]; then
-		echo "Файл не найден. Создать?(y)";
-		read -rsn1 input;
-		if [[ $input == y ]]; then
-			touch $1;
-		else
-			exit
-		fi
+if [[ ! -f "$1" ]]; then
+    echo "Файл не найден. Создать?(y)"
+    read -rsn1 input
+    if [[ $input == y ]]; then
+        touch $1
+    else
+        exit
     fi
+fi
 
-file_to_include="$HOME/.config/fep/premain";
+file_to_include="$HOME/.config/fep/premain"
 if [[ -f "$file_to_include" ]]; then
-    source "$file_to_include";
+    source "$file_to_include"
 fi
 
 main "$1"
-rm $file 2> /dev/null
+rm $file 2>/dev/null;
+exit 0;
