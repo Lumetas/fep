@@ -7,6 +7,51 @@ if [[ -f "$file_to_include" ]]; then
     source "$file_to_include";
 fi
 
+insertx=0;
+inserty=0;
+
+highlight_char() {
+    local index="$1"  # Индекс символа, который нужно окрасить
+    shift             # Сдвиг аргументов, остальные будут строкой
+
+    # Объединяем оставшиеся аргументы в одну строку
+    local string="$*"
+
+    # Проверяем, что индекс не выходит за пределы строки
+    if [ "$index" -gt "${#string}" ] || [ "$index" -lt 0 ]; then
+        echo "Индекс $index вне диапазона строки."
+        return
+    fi
+
+    # Проверка на случай выхода за пределы строки на 1
+    if [ "$index" -eq "${#string}" ]; then
+        local red_square='■'  # Символ квадрат 
+        local red='\033[0;31m'
+        local reset='\033[0m'
+        echo -e "${string}${red}${red_square}${reset}"
+        return
+    fi
+
+    # Получаем символ по указанному индексу
+    local char_to_highlight="${string:$index:1}"
+
+    # Проверяем, является ли символ пробелом
+    if [ "$char_to_highlight" == " " ]; then
+        char_to_highlight='■'  # Заменяем пробел на квадрат
+    fi
+
+    # Цвет для красного
+    local red='\033[0;31m'
+    local reset='\033[0m'
+
+    # Собираем строку с окрашенным символом
+    local highlighted_string="${string:0:index}${red}${char_to_highlight}${reset}${string:index+1}"
+
+    # Выводим результат
+    echo -e "$highlighted_string"
+}
+
+
 delete_lines() {
     local file="$1"
     local range="$2"
@@ -129,8 +174,8 @@ function edit_range {
 openFile() {
     if [[ ! -f "$1" ]]; then
 		echo "Файл не найден. Создать?(y)";
-		read -rsn1;
-		if [[ $REPLY == y ]]; then
+		read -rsn1 input;
+		if [[ $input == y ]]; then
 			touch $1;
 		else
 			return 1
@@ -166,8 +211,15 @@ main() {
         # Очистка терминала
         clear # Вывод строк
 
+		current_string="${content[inserty]}";
+		current_string_length=${#current_string};
+		
+		if [[ $current_string_length -lt $insertx ]]; then insertx=$current_string_length; fi
+
         for ((i = startLine; i < startLine + linesPerPage && i < lineCount; i++)); do
-      echo "$(( $i + 1 )): ${content[i]}"
+			if [[ $i == $inserty ]]; then echo "$(( $i + 1 )): $(highlight_char $insertx ${content[i]})";
+			else echo "$(( $i + 1 )): ${content[i]}"; fi
+
       linesPerPage=$(( $(tput lines) - 2 ))
         done
         
@@ -176,18 +228,26 @@ main() {
 
         # Обработка ввода
 
+
+
+
 		file_to_include="$HOME/.config/fep/enditer";
 		if [[ -f "$file_to_include" ]]; then
 		    source "$file_to_include";
 		fi
 
+
 		if [[ "$input" == "q" ]]; then break; fi
-		if [[ "$input" == "j" ]]; then ((startLine++)) && ((startLine >= lineCount)) && startLine=$((lineCount - 1)); fi 
-		if [[ "$input" == "k" ]]; then ((startLine--)) && ((startLine < 0)) && startLine=0; fi 
+		if [[ "$input" == "J" ]]; then ((startLine++)) && ((startLine >= lineCount)) && startLine=$((lineCount - 1)); fi 
+		if [[ "$input" == "K" ]]; then ((startLine--)) && ((startLine < 0)) && startLine=0; fi 
 		if [[ "$input" == ":" ]]; then commandMode; fi 
 		if [[ "$input" == "/" ]]; then startLine=$(search "$1"); fi 
 		if [[ "$input" == "e" ]]; then edit $1 $startLine && lineCount=${#content[@]}; fi 
 		if [[ "$input" == "d" ]]; then del $1 && lineCount=${#content[@]}; fi 
+		if [[ $input == h ]]; then if [[ $insertx != 0 ]]; then insertx=$(($insertx - 1)); fi; fi
+		if [[ $input == l ]]; then if [[ $current_string_length -gt $insertx ]]; then insertx=$(($insertx + 1)); fi; fi
+		if [[ $input == j ]]; then inserty=$(($inserty + 1)); fi
+		if [[ $input == k ]]; then inserty=$(($inserty - 1)); fi
 
 
     done
@@ -229,3 +289,5 @@ if [[ -f "$file_to_include" ]]; then
     source "$file_to_include";
 fi
 main "$1"
+
+
