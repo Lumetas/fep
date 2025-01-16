@@ -1,0 +1,210 @@
+#!/bin/bash
+# Функция для открытия файла
+# BACKPATH=$PATH;
+# PATH="";
+
+delete_lines() {
+    local file="$1"
+    local range="$2"
+
+    # Проверка существования файла
+    if [[ ! -f "$file" ]]; then
+        echo "Файл не найден: $file"
+        return 1
+    fi
+
+    # Обработка диапазона
+    if [[ "$range" =~ ^[0-9]+$ ]]; then
+        # Формат: X
+        sed -i.bak "${range}d" "$file"
+    elif [[ "$range" =~ ^([0-9]+)\.\.([0-9]+)$ ]]; then
+        # Формат: X..Y
+        start="${BASH_REMATCH[1]}"
+        end="${BASH_REMATCH[2]}"
+        sed -i.bak "${start},${end}d" "$file"
+    else
+        echo "Неверный формат диапазона: $range"
+        return 1
+    fi
+
+}
+
+function edit_range {
+    local range=$1
+    local file=$2
+    local replace_mode=$3
+
+    if [[ $range =~ ^([0-9]+)\.$ ]]; then
+        # Формат "X." - вставка многострочного текста после строки X
+        local line_number=${BASH_REMATCH[1]}
+        # echo "Введите многострочный текст (Ctrl+D для окончания ввода):"
+        new_text=$(cat)  # Читаем весь ввод до Ctrl+D
+
+        # Вставляем все строки по отдельности
+        IFS=$'\n'       # Задаем разделитель как новая строка
+        for line in $new_text; do
+            sed -i "${line_number}a $line" "$file"
+            line_number=$((line_number + 1))  # Увеличиваем номер строки для добавления
+        done
+
+    elif [[ $range =~ ^([0-9]+)\.\.$ ]]; then
+        # Формат "X.." - вставка многострочного текста перед строкой X
+        local start=${BASH_REMATCH[1]}
+        # echo "Введите многострочный текст (Ctrl+D для окончания ввода):"
+        new_text=$(cat)  # Читаем весь ввод до Ctrl+D 
+
+        if [[ $replace_mode == true ]]; then
+            # Вставляем все строки по отдельности
+            IFS=$'\n'       # Задаем разделитель как новая строка
+            for line in $new_text; do
+                sed -i "${start}i $line" "$file"
+                start=$((start + 1))  # Увеличиваем номер строки для добавления
+            done
+        else
+            # echo "Текущая строка ${start}: $(sed -n "${start}p" "$file")"
+      echo;
+        fi
+
+    elif [[ $range =~ ^([0-9]+)\.\.([0-9]+)$ ]]; then
+        # Формат "X..Y" - удаляем строки от X до Y и вставляем многострочный текст
+        local start=${BASH_REMATCH[1]}
+        local end=${BASH_REMATCH[2]}
+
+        if [[ -f $file ]]; then
+            if [[ $replace_mode == true ]]; then
+                # echo "Введите многострочный текст (Ctrl+D для окончания ввода):"
+                new_text=$(cat)  # Читаем весь ввод до Ctrl+D
+
+                # Удаляем строки от start до end
+                sed -i "${start},${end}d" "$file"
+
+                # Вставляем новый текст на место удаленных строк
+                IFS=$'\n'       # Задаем разделитель как новая строка
+                for line in $new_text; do
+                    sed -i "${start}i $line" "$file"
+                    start=$((start + 1))  # Увеличиваем номер строки для добавления
+                done
+
+                # echo "Строки от $start до $end удалены, и новый текст вставлен."
+            else
+                # Вывод строк от start до end
+                sed -n "${start},${end}p" "$file"  # Выводим строки от start до end
+            fi
+        else
+            echo "Файл '$file' не найден."
+        fi
+
+    elif [[ $range =~ ^[0-9]+$ ]]; then
+        # Простое число - замена строки
+        local line_number=$range
+        # echo "Введите новый текст (для замены строки):"
+        new_text=$(cat)   # Читаем весь ввод до Ctrl+D
+        
+        # Для замены строки используем здесь c вместо s
+        # и обрабатываем многострочный текст по строкам
+        IFS=$'\n'
+        tmp_file=$(mktemp)  # Создаем временный файл
+        {
+            # Сначала выводим строки до нужной
+            sed -n "1,$((line_number - 1))p" "$file"
+            # Выводим новый текст
+
+            echo "$new_text"
+            # Затем выводим остальные строки
+            sed -n "$((line_number + 1)),\$p" "$file"
+        } > "$tmp_file"
+
+        # Заменяем оригинальный файл временным
+        mv "$tmp_file" "$file"
+
+    else
+        echo "Некорректный формат диапазона."
+    fi
+}
+
+openFile() {
+    if [[ ! -f "$1" ]]; then
+        echo "Файл не найден."
+        return 1
+    fi
+    mapfile -t content < "$1"  # Читаем файл в массив
+    return 0
+}
+
+search() {
+  read;
+  string=$(grep -n "$REPLY" $1 | head -n 1 | cut -d: -f1); 
+    echo $(( $string - 1 ));
+}
+
+# Основной текстовый редактор
+main() {
+    openFile "$1" || return  # Открываем файл
+    lineCount=${#content[@]}
+    startLine=0
+    linesPerPage=$(( $(tput lines) - 2 ))  # Количество строк, выводимых за раз
+  
+
+
+
+  
+    while true; do
+
+        # Очистка терминала
+        clear # Вывод строк
+
+        for ((i = startLine; i < startLine + linesPerPage && i < lineCount; i++)); do
+      echo "$(( $i + 1 )): ${content[i]}"
+      linesPerPage=$(( $(tput lines) - 2 ))
+        done
+        
+        # Управление
+        read -rsn1 input  # Ожидание ввода одного символа
+
+        # Обработка ввода
+        case "$input" in
+            q) break ;;  # Выход из редактора
+            j) ((startLine++)) && ((startLine >= lineCount)) && startLine=$((lineCount - 1)) ;;  # Прокрутка вниз
+            k) ((startLine--)) && ((startLine < 0)) && startLine=0 ;;  # Прокрутка вверх
+      :) commandMode ;;
+      /) startLine=$(search "$1") ;;
+      e) edit $1 $startLine && lineCount=${#content[@]} ;;
+	  d) del $1 && lineCount=${#content[@]} ;;
+        esac
+    done
+}
+
+
+del () {
+read;
+delete_lines $1 $REPLY;
+openFile $1;
+}
+
+edit() {
+  read;
+  range=$REPLY;
+  clear;
+  edit_range $REPLY $1 true;
+  openFile $1;
+  
+}
+
+commandMode() {
+read;
+$REPLY;
+sleep 1;
+}
+
+# Проверка аргументов командной строки
+if [[ $# -lt 1 ]]; then
+    echo "Использование: $0 <имя_файла>"
+    exit 1
+fi
+
+
+# Запуск редактора с указанным файлом
+
+main "$1"
+
+
