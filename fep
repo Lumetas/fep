@@ -2,6 +2,10 @@
 # Функция для открытия файла
 # BACKPATH=$PATH;
 # PATH="";
+file_to_include="$HOME/.config/fep/start";
+if [[ -f "$file_to_include" ]]; then
+    source "$file_to_include";
+fi
 
 delete_lines() {
     local file="$1"
@@ -124,8 +128,13 @@ function edit_range {
 
 openFile() {
     if [[ ! -f "$1" ]]; then
-        echo "Файл не найден."
-        return 1
+		echo "Файл не найден. Создать?(y)";
+		read -rsn1;
+		if [[ $REPLY == y ]]; then
+			touch $1;
+		else
+			return 1
+		fi
     fi
     mapfile -t content < "$1"  # Читаем файл в массив
     return 0
@@ -150,6 +159,10 @@ main() {
   
     while true; do
 
+		file_to_include="$HOME/.config/fep/startiter";
+		if [[ -f "$file_to_include" ]]; then
+			source "$file_to_include";
+		fi
         # Очистка терминала
         clear # Вывод строк
 
@@ -162,15 +175,21 @@ main() {
         read -rsn1 input  # Ожидание ввода одного символа
 
         # Обработка ввода
-        case "$input" in
-            q) break ;;  # Выход из редактора
-            j) ((startLine++)) && ((startLine >= lineCount)) && startLine=$((lineCount - 1)) ;;  # Прокрутка вниз
-            k) ((startLine--)) && ((startLine < 0)) && startLine=0 ;;  # Прокрутка вверх
-      :) commandMode ;;
-      /) startLine=$(search "$1") ;;
-      e) edit $1 $startLine && lineCount=${#content[@]} ;;
-	  d) del $1 && lineCount=${#content[@]} ;;
-        esac
+
+		file_to_include="$HOME/.config/fep/enditer";
+		if [[ -f "$file_to_include" ]]; then
+		    source "$file_to_include";
+		fi
+
+		if [[ "$input" == "q" ]]; then break; fi
+		if [[ "$input" == "j" ]]; then ((startLine++)) && ((startLine >= lineCount)) && startLine=$((lineCount - 1)); fi 
+		if [[ "$input" == "k" ]]; then ((startLine--)) && ((startLine < 0)) && startLine=0; fi 
+		if [[ "$input" == ":" ]]; then commandMode; fi 
+		if [[ "$input" == "/" ]]; then startLine=$(search "$1"); fi 
+		if [[ "$input" == "e" ]]; then edit $1 $startLine && lineCount=${#content[@]}; fi 
+		if [[ "$input" == "d" ]]; then del $1 && lineCount=${#content[@]}; fi 
+
+
     done
 }
 
@@ -205,6 +224,8 @@ fi
 
 # Запуск редактора с указанным файлом
 
+file_to_include="$HOME/.config/fep/premain";
+if [[ -f "$file_to_include" ]]; then
+    source "$file_to_include";
+fi
 main "$1"
-
-
