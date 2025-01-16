@@ -265,14 +265,13 @@ rewrite() {
 }
 
 saveFile() {
-    mv $file $1
+    dd if=$file of=$1 2> /dev/null || exit;
 }
 
 # Основной текстовый редактор
 main() {
     file=mktemp
-    mv $1 $file
-    cp $file $1
+    dd if=$1 of=$file 2> /dev/null || exit;
     openFile "$file" || return # Открываем файл
 
     startLine=0
