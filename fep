@@ -353,6 +353,7 @@ replace_char_in_line() {
 
     mv "$temp_file" "$file"
 }
+
 # Подсветка символа под курсором (белая заливка как в visual mode)
 highlight_char() {
     local index="$1"
@@ -512,7 +513,7 @@ edit_range() {
         return
     fi
 
-    # Обработка диапазона - (вставка перед текущей строкой)
+    # Обработка диапазона - (вставка перед текущей строки)
     if [[ "$range" == "-" ]]; then
         insert_line_before "$inserty" "$file"
         openFile "$file"
@@ -601,6 +602,7 @@ openFile() {
     fi
     return 0
 }
+
 # Перерисовка экрана
 rewrite() {
     clear
@@ -1008,6 +1010,90 @@ adjust_scroll_to_cursor() {
     fi
 }
 
+# Переход к следующему слову (w)
+next_word() {
+    if [[ $lineCount -eq 0 ]]; then
+        return
+    fi
+    
+    current_string="${content[inserty]}"
+    local length=${#current_string}
+    
+    # Если мы в конце строки, переходим к следующей строке
+    if [[ $insertx -ge $length ]]; then
+        if [[ $inserty -lt $((lineCount - 1)) ]]; then
+            ((inserty++))
+            insertx=0
+            adjust_scroll_to_cursor
+        fi
+        return
+    fi
+    
+    # Пропускаем текущее слово (если мы на нем)
+    local i=$insertx
+    while [[ $i -lt $length && "${current_string:$i:1}" =~ [[:alnum:]_] ]]; do
+        ((i++))
+    done
+    
+    # Пропускаем пробелы/разделители
+    while [[ $i -lt $length && ! "${current_string:$i:1}" =~ [[:alnum:]_] ]]; do
+        ((i++))
+    done
+    
+    # Если нашли начало следующего слова
+    if [[ $i -lt $length ]]; then
+        insertx=$i
+    else
+        # Переходим к следующей строке
+        if [[ $inserty -lt $((lineCount - 1)) ]]; then
+            ((inserty++))
+            insertx=0
+            adjust_scroll_to_cursor
+        else
+            # Если это последняя строка, переходим в конец
+            insertx=$length
+        fi
+    fi
+}
+
+# Переход к предыдущему слову (b)
+prev_word() {
+    if [[ $lineCount -eq 0 ]]; then
+        return
+    fi
+    
+    current_string="${content[inserty]}"
+    
+    # Если мы в начале строки, переходим к предыдущей строке
+    if [[ $insertx -eq 0 ]]; then
+        if [[ $inserty -gt 0 ]]; then
+            ((inserty--))
+            current_string="${content[inserty]}"
+            insertx=${#current_string}
+            adjust_scroll_to_cursor
+        fi
+        return
+    fi
+    
+    # Двигаемся назад через пробелы/разделители
+    local i=$((insertx - 1))
+    while [[ $i -gt 0 && ! "${current_string:$i:1}" =~ [[:alnum:]_] ]]; do
+        ((i--))
+    done
+    
+    # Двигаемся назад через слово
+    while [[ $i -gt 0 && "${current_string:$i:1}" =~ [[:alnum:]_] ]]; do
+        ((i--))
+    done
+    
+    # Корректируем позицию
+    if [[ $i -eq 0 && "${current_string:$i:1}" =~ [[:alnum:]_] ]]; then
+        insertx=0
+    else
+        insertx=$((i + 1))
+    fi
+}
+
 # Visual mode
 visualMode() {
     visual_mode=1
@@ -1064,6 +1150,120 @@ visualMode() {
                         visual_end_x=${#content[visual_end_y]}
                     fi
                 fi
+                ;;
+            "w")
+                # Переход к следующему слову в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                # Сохраняем текущую позицию курсора
+                insertx=$temp_x
+                inserty=$temp_y
+                
+                # Вызываем функцию next_word для обновления позиции
+                next_word
+                
+                # Обновляем конечную позицию выделения
+                visual_end_x=$insertx
+                visual_end_y=$inserty
+                ;;
+            "b")
+                # Переход к предыдущему слову в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                # Сохраняем текущую позицию курсора
+                insertx=$temp_x
+                inserty=$temp_y
+                
+                # Вызываем функцию prev_word для обновления позиции
+                prev_word
+                
+                # Обновляем конечную позицию выделения
+                visual_end_x=$insertx
+                visual_end_y=$inserty
+                ;;
+            "0")
+                # Начало строки в visual mode
+                visual_end_x=0
+                ;;
+            "$")
+                # Конец строки в visual mode
+                if [[ $visual_end_y -lt $lineCount ]]; then
+                    visual_end_x=${#content[visual_end_y]}
+                fi
+                ;;
+            "f")
+                # Поиск символа вперед в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                insertx=$temp_x
+                inserty=$temp_y
+                find_char_forward "$file"
+                
+                visual_end_x=$insertx
+                visual_end_y=$inserty
+                ;;
+            "F")
+                # Поиск символа назад в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                insertx=$temp_x
+                inserty=$temp_y
+                find_char_backward "$file"
+                
+                visual_end_x=$insertx
+                visual_end_y=$inserty
+                ;;
+            "t")
+                # Поиск до символа вперед в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                insertx=$temp_x
+                inserty=$temp_y
+                find_till_char_forward "$file"
+                
+                visual_end_x=$insertx
+                visual_end_y=$inserty
+                ;;
+            "T")
+                # Поиск до символа назад в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                insertx=$temp_x
+                inserty=$temp_y
+                find_till_char_backward "$file"
+                
+                visual_end_x=$insertx
+                visual_end_y=$inserty
+                ;;
+            "g")
+                # Переход к строке в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                insertx=$temp_x
+                inserty=$temp_y
+                goto_line
+                
+                visual_end_x=$insertx
+                visual_end_y=$inserty
+                ;;
+            "G")
+                # Переход в конец файла в visual mode
+                local temp_x=$visual_end_x
+                local temp_y=$visual_end_y
+                
+                insertx=$temp_x
+                inserty=$temp_y
+                goto_end
+                
+                visual_end_x=$insertx
+                visual_end_y=$inserty
                 ;;
             "d")
                 # Удаление выделенного текста
@@ -1320,6 +1520,8 @@ main() {
             "T") find_till_char_backward "$file" ;; # Поиск до символа назад
             "g") goto_line ;;                     # Переход к строке
             "G") goto_end ;;                      # Переход в конец файла
+            "w") next_word ;;                     # Следующее слово
+            "b") prev_word ;;                     # Предыдущее слово
         esac
 
         norewrite=0
