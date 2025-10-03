@@ -10,6 +10,7 @@ PREMAIN_CONFIG="$CONFIG_DIR/premain"
 # Глобальные переменные
 file=""
 declare -a content
+declare -a original_content
 lineCount=0
 insertx=0
 inserty=0
@@ -19,6 +20,7 @@ norewrite=0
 current_string=""
 current_string_length=0
 original_file=""
+modified=0
 
 # Visual mode variables
 visual_mode=0
@@ -26,6 +28,137 @@ visual_start_x=0
 visual_start_y=0
 visual_end_x=0
 visual_end_y=0
+
+# Undo/redo system
+declare -a undo_stack
+declare -a redo_stack
+undo_index=0
+
+# Структура для хранения состояний
+save_state() {
+    # Сохраняем текущее состояние в отдельный массив
+    local state=()
+    for ((i=0; i<lineCount; i++)); do
+        state[i]="${content[i]}"
+    done
+    
+    # Сохраняем состояние как строку с разделителем, который не встречается в тексте
+    local serialized_state=""
+    for ((i=0; i<lineCount; i++)); do
+        # Экранируем символы перевода строки
+        local line="${state[i]//$'\n'/\\n}"
+        serialized_state+="$line"
+        if [[ $i -lt $((lineCount-1)) ]]; then
+            serialized_state+=$'\x1f'  # Используем Unit Separator как разделитель
+        fi
+    done
+    
+    undo_stack[undo_index]="$serialized_state"
+    undo_index=$((undo_index + 1))
+    
+    # Ограничиваем размер стека undo
+    if [[ ${#undo_stack[@]} -gt 100 ]]; then
+        undo_stack=("${undo_stack[@]:1}")
+        undo_index=$((undo_index - 1))
+    fi
+    
+    # Очищаем стек redo при новом действии
+    redo_stack=()
+    modified=1
+}
+
+# Undo
+undo() {
+    if [[ $undo_index -gt 1 ]]; then
+        # Сохраняем текущее состояние в redo
+        local current_state=""
+        for ((i=0; i<lineCount; i++)); do
+            local line="${content[i]//$'\n'/\\n}"
+            current_state+="$line"
+            if [[ $i -lt $((lineCount-1)) ]]; then
+                current_state+=$'\x1f'
+            fi
+        done
+        redo_stack+=("$current_state")
+        
+        # Восстанавливаем предыдущее состояние
+        undo_index=$((undo_index - 1))
+        local previous_state="${undo_stack[undo_index-1]}"
+        
+        # Восстанавливаем содержимое
+        content=()
+        IFS=$'\x1f' read -r -a content <<< "$previous_state"
+        lineCount=${#content[@]}
+        
+        # Восстанавливаем экранированные символы
+        for ((i=0; i<lineCount; i++)); do
+            content[i]="${content[i]//\\n/$'\n'}"
+        done
+        
+        # Обновляем текущую позицию
+        if [[ $lineCount -gt 0 ]]; then
+            current_string="${content[inserty]}"
+            current_string_length=${#current_string}
+            if [[ $insertx -gt $current_string_length ]]; then
+                insertx=$current_string_length
+            fi
+        else
+            current_string=""
+            current_string_length=0
+            insertx=0
+            inserty=0
+        fi
+        
+        adjust_scroll_to_cursor
+    fi
+}
+
+# Redo
+redo() {
+    if [[ ${#redo_stack[@]} -gt 0 ]]; then
+        # Сохраняем текущее состояние в undo
+        local current_state=""
+        for ((i=0; i<lineCount; i++)); do
+            local line="${content[i]//$'\n'/\\n}"
+            current_state+="$line"
+            if [[ $i -lt $((lineCount-1)) ]]; then
+                current_state+=$'\x1f'
+            fi
+        done
+        undo_stack[undo_index]="$current_state"
+        undo_index=$((undo_index + 1))
+        
+        # Восстанавливаем состояние из redo
+        local redo_state="${redo_stack[-1]}"
+        unset 'redo_stack[${#redo_stack[@]}-1]'
+        
+        # Восстанавливаем содержимое
+        content=()
+        IFS=$'\x1f' read -r -a content <<< "$redo_state"
+        lineCount=${#content[@]}
+        
+        # Восстанавливаем экранированные символы
+        for ((i=0; i<lineCount; i++)); do
+            content[i]="${content[i]//\\n/$'\n'}"
+        done
+        
+        # Обновляем текущую позицию
+        if [[ $lineCount -gt 0 ]]; then
+            current_string="${content[inserty]}"
+            current_string_length=${#current_string}
+            if [[ $insertx -gt $current_string_length ]]; then
+                insertx=$current_string_length
+            fi
+        else
+            current_string=""
+            current_string_length=0
+            insertx=0
+            inserty=0
+        fi
+        
+        adjust_scroll_to_cursor
+    fi
+}
 
 # Загрузка конфигурационных файлов
 load_config() {
@@ -93,9 +226,11 @@ get_selected_text() {
     echo "$selected_text"
 }
 
-# Удаление выделенного текста
+# Удаление выделенного текста (в памяти)
 delete_selected_text() {
-    local start_y=$1 start_x=$2 end_y=$3 end_x=$4 file=$5
+    local start_y=$1 start_x=$2 end_y=$3 end_x=$4
+    
+    save_state
     
     # Нормализуем координаты для правильного удаления
     local del_start_y=$start_y
@@ -129,232 +264,234 @@ delete_selected_text() {
         
         # Создаем новую строку без выделенного фрагмента
         local new_line="${line:0:start_pos}${line:end_pos}"
-        replace_line "$del_start_y" "$new_line" "$file"
+        content[del_start_y]="$new_line"
         
     else
         # Многострочное удаление
-        local temp_file=$(mktemp)
-        local current_line=0
+        local new_content=()
         
-        while IFS= read -r line; do
-            if [[ $current_line -eq $del_start_y ]]; then
+        for ((i=0; i<lineCount; i++)); do
+            if [[ $i -lt $del_start_y || $i -gt $del_end_y ]]; then
+                # Строки до и после выделения
+                new_content+=("${content[i]}")
+            elif [[ $i -eq $del_start_y ]]; then
                 # Первая строка выделения - обрезаем с конца
-                echo "${line:0:del_start_x}" >> "$temp_file"
-            elif [[ $current_line -eq $del_end_y ]]; then
+                local first_line="${content[i]}"
+                new_content+=("${first_line:0:del_start_x}")
+            elif [[ $i -eq $del_end_y ]]; then
                 # Последняя строка выделения - обрезаем с начала
-                if [[ $del_end_x -lt ${#line} ]]; then
-                    echo "${line:del_end_x}" >> "$temp_file"
+                local last_line="${content[i]}"
+                if [[ $del_end_x -lt ${#last_line} ]]; then
+                    new_content+=("${last_line:del_end_x}")
                 fi
-            elif [[ $current_line -lt $del_start_y || $current_line -gt $del_end_y ]]; then
-                # Строки вне выделения
-                echo "$line" >> "$temp_file"
             fi
-            ((current_line++))
-        done < "$file"
+        done
         
-        mv "$temp_file" "$file"
+        content=("${new_content[@]}")
+        lineCount=${#content[@]}
+    fi
+    
+    # Обновляем текущую позицию
+    inserty=$del_start_y
+    insertx=$del_start_x
+    if [[ $lineCount -gt 0 ]]; then
+        current_string="${content[inserty]}"
+        current_string_length=${#current_string}
+    else
+        current_string=""
+        current_string_length=0
     fi
 }
 
-# Замена строки
+# Замена строки (в памяти)
 replace_line() {
     local line_number=$1
     local new_line=$2
-    local file=$3
-    local temp_file=$(mktemp)
-    
-    local current_line=0
-    while IFS= read -r line; do
-        if [[ $current_line -eq $line_number ]]; then
-            echo "$new_line" >> "$temp_file"
-        else
-            echo "$line" >> "$temp_file"
-        fi
-        ((current_line++))
-    done < "$file"
-    
-    mv "$temp_file" "$file"
+    content[line_number]="$new_line"
 }
 
-# Вставка новой строки после указанной
+# Вставка новой строки после указанной (в памяти)
 insert_line_after() {
     local line_number=$1
-    local file=$2
-    local temp_file=$(mktemp)
+    save_state
     
-    local current_line=0
-    while IFS= read -r line; do
-        echo "$line" >> "$temp_file"
-        if [[ $current_line -eq $line_number ]]; then
-            echo "" >> "$temp_file"
-        fi
-        ((current_line++))
-    done < "$file"
+    local new_content=()
+    for ((i=0; i<=line_number; i++)); do
+        new_content+=("${content[i]}")
+    done
+    new_content+=("")
+    for ((i=line_number+1; i<lineCount; i++)); do
+        new_content+=("${content[i]}")
+    done
     
-    mv "$temp_file" "$file"
+    content=("${new_content[@]}")
+    lineCount=${#content[@]}
 }
 
-# Вставка новой строки перед указанной
+# Вставка новой строки перед указанной (в памяти)
 insert_line_before() {
     local line_number=$1
-    local file=$2
-    local temp_file=$(mktemp)
+    save_state
     
-    local current_line=0
-    while IFS= read -r line; do
-        if [[ $current_line -eq $line_number ]]; then
-            echo "" >> "$temp_file"
-        fi
-        echo "$line" >> "$temp_file"
-        ((current_line++))
-    done < "$file"
+    local new_content=()
+    for ((i=0; i<line_number; i++)); do
+        new_content+=("${content[i]}")
+    done
+    new_content+=("")
+    for ((i=line_number; i<lineCount; i++)); do
+        new_content+=("${content[i]}")
+    done
     
-    mv "$temp_file" "$file"
+    content=("${new_content[@]}")
+    lineCount=${#content[@]}
 }
 
-# Удаление символа
+# Удаление символа (в памяти)
 remove_char() {
-    local line_number="$1"    # Номер строки (начиная с нуля)
-    local char_position="$2"  # Позиция символа в строке (начиная с нуля)
-    local file="$3"           # Имя файла
-    local temp_file=$(mktemp)
-
-    local current_line=0
-    while IFS= read -r line; do
-        if [ "$current_line" -eq "$line_number" ]; then
-            if [ "$char_position" -lt 0 ] || [ "$char_position" -ge "${#line}" ]; then
-                echo "Ошибка: позиция символа $char_position выходит за пределы строки."
-                rm "$temp_file"
-                return 1
-            fi
-            modified_line="${line:0:char_position}${line:char_position+1}"
-            echo "$modified_line" >>"$temp_file"
-        else
-            echo "$line" >>"$temp_file"
-        fi
-        ((current_line++))
-    done <"$file"
-
-    mv "$temp_file" "$file"
+    local line_number="$1"
+    local char_position="$2"
+    
+    save_state
+    
+    if [[ $line_number -lt 0 || $line_number -ge $lineCount ]]; then
+        return 1
+    fi
+    
+    local line="${content[line_number]}"
+    if [[ $char_position -lt 0 || $char_position -ge ${#line} ]]; then
+        return 1
+    fi
+    
+    local modified_line="${line:0:char_position}${line:char_position+1}"
+    content[line_number]="$modified_line"
+    
+    if [[ $line_number -eq $inserty ]]; then
+        current_string="$modified_line"
+        current_string_length=${#modified_line}
+    fi
 }
 
-# Вставка символа (не замена)
+# Вставка символа (в памяти)
 insert_char() {
     local new_char="$1"
     local line_number="$2"
     local char_position="$3"
-    local file="$4"
-    local temp_file=$(mktemp)
-
-    local current_line=0
-    while IFS= read -r line; do
-        if [ "$current_line" -eq "$line_number" ]; then
-            if [ "$char_position" -lt 0 ]; then
-                echo "Ошибка: позиция символа $char_position выходит за пределы строки."
-                rm "$temp_file"
-                return 1
-            elif [ "$char_position" -gt "${#line}" ]; then
-                # Если позиция больше длины строки, добавляем пробелы и символ
-                local padding=$((char_position - ${#line}))
-                modified_line="${line}$(printf '%*s' $padding '')${new_char}"
-            else
-                # Вставляем символ (не заменяем)
-                modified_line="${line:0:char_position}${new_char}${line:char_position}"
-            fi
-            echo "$modified_line" >>"$temp_file"
-        else
-            echo "$line" >>"$temp_file"
-        fi
-        ((current_line++))
-    done <"$file"
-
-    mv "$temp_file" "$file"
+    
+    save_state
+    
+    if [[ $line_number -lt 0 || $line_number -ge $lineCount ]]; then
+        return 1
+    fi
+    
+    local line="${content[line_number]}"
+    
+    if [[ $char_position -lt 0 ]]; then
+        return 1
+    elif [[ $char_position -gt ${#line} ]]; then
+        # Если позиция больше длины строки, добавляем пробелы и символ
+        local padding=$((char_position - ${#line}))
+        local modified_line="${line}$(printf '%*s' $padding '')${new_char}"
+    else
+        # Вставляем символ (не заменяем)
+        local modified_line="${line:0:char_position}${new_char}${line:char_position}"
+    fi
+    
+    content[line_number]="$modified_line"
+    
+    if [[ $line_number -eq $inserty ]]; then
+        current_string="$modified_line"
+        current_string_length=${#modified_line}
+    fi
 }
 
-# Вставка новой строки
+# Вставка новой строки (в памяти)
 insert_newline() {
     local line_number="$1"
     local char_position="$2"
-    local file="$3"
-    local temp_file=$(mktemp)
-
-    local current_line=0
-    while IFS= read -r line; do
-        if [ "$current_line" -eq "$line_number" ]; then
-            # Разделяем строку на две части
-            local first_part="${line:0:char_position}"
-            local second_part="${line:char_position}"
-            echo "$first_part" >>"$temp_file"
-            echo "$second_part" >>"$temp_file"
-        else
-            echo "$line" >>"$temp_file"
-        fi
-        ((current_line++))
-    done <"$file"
-
-    mv "$temp_file" "$file"
-}
-
-# Удаление переноса строки (объединение с предыдущей строкой)
-remove_newline() {
-    local line_number="$1"
-    local file="$2"
-    local temp_file=$(mktemp)
-
-    if [[ $line_number -eq 0 ]]; then
-        echo "Ошибка: нельзя объединить первую строку"
-        rm "$temp_file"
+    
+    save_state
+    
+    if [[ $line_number -lt 0 || $line_number -ge $lineCount ]]; then
         return 1
     fi
-
-    local current_line=0
-    while IFS= read -r line; do
-        if [ "$current_line" -eq $((line_number - 1)) ]; then
-            # Запоминаем предыдущую строку
-            local prev_line="$line"
-        elif [ "$current_line" -eq "$line_number" ]; then
-            # Объединяем с предыдущей строкой
-            echo "${prev_line}${line}" >>"$temp_file"
-        elif [ "$current_line" -ne $((line_number - 1)) ]; then
-            echo "$line" >>"$temp_file"
-        fi
-        ((current_line++))
-    done <"$file"
-
-    mv "$temp_file" "$file"
+    
+    local line="${content[line_number]}"
+    local first_part="${line:0:char_position}"
+    local second_part="${line:char_position}"
+    
+    local new_content=()
+    for ((i=0; i<line_number; i++)); do
+        new_content+=("${content[i]}")
+    done
+    new_content+=("$first_part")
+    new_content+=("$second_part")
+    for ((i=line_number+1; i<lineCount; i++)); do
+        new_content+=("${content[i]}")
+    done
+    
+    content=("${new_content[@]}")
+    lineCount=${#content[@]}
 }
 
-# Замена символа
+# Удаление переноса строки (объединение с предыдущей строкой) (в памяти)
+remove_newline() {
+    local line_number="$1"
+    
+    save_state
+    
+    if [[ $line_number -lt 1 || $line_number -ge $lineCount ]]; then
+        return 1
+    fi
+    
+    local prev_line="${content[line_number-1]}"
+    local current_line="${content[line_number]}"
+    local merged_line="${prev_line}${current_line}"
+    
+    local new_content=()
+    for ((i=0; i<line_number-1; i++)); do
+        new_content+=("${content[i]}")
+    done
+    new_content+=("$merged_line")
+    for ((i=line_number+1; i<lineCount; i++)); do
+        new_content+=("${content[i]}")
+    done
+    
+    content=("${new_content[@]}")
+    lineCount=${#content[@]}
+}
+
+# Замена символа (в памяти)
 replace_char_in_line() {
     local new_char="$1"
     local line_number="$2"
     local char_position="$3"
-    local file="$4"
-    local temp_file=$(mktemp)
-
-    local current_line=0
-    while IFS= read -r line; do
-        if [ "$current_line" -eq "$line_number" ]; then
-            if [ "$char_position" -ge "${#line}" ]; then
-                modified_line="${line}${new_char}"
-            elif [ "$char_position" -lt 0 ]; then
-                echo "Ошибка: позиция символа $char_position выходит за пределы строки."
-                rm "$temp_file"
-                return 1
-            else
-                modified_line="${line:0:char_position}${new_char}${line:char_position+1}"
-            fi
-            echo "$modified_line" >>"$temp_file"
-        else
-            echo "$line" >>"$temp_file"
-        fi
-        ((current_line++))
-    done <"$file"
-
-    mv "$temp_file" "$file"
+    
+    save_state
+    
+    if [[ $line_number -lt 0 || $line_number -ge $lineCount ]]; then
+        return 1
+    fi
+    
+    local line="${content[line_number]}"
+    local modified_line=""
+    
+    if [[ $char_position -ge ${#line} ]]; then
+        modified_line="${line}${new_char}"
+    elif [[ $char_position -lt 0 ]]; then
+        return 1
+    else
+        modified_line="${line:0:char_position}${new_char}${line:char_position+1}"
+    fi
+    
+    content[line_number]="$modified_line"
+    
+    if [[ $line_number -eq $inserty ]]; then
+        current_string="$modified_line"
+        current_string_length=${#modified_line}
+    fi
 }
 
-# Подсветка символа под курсором (белая заливка как в visual mode)
+# Подсветка символа под курсором
 highlight_char() {
     local index="$1"
     shift
@@ -449,15 +586,11 @@ highlight_selection() {
     echo -e "$result"
 }
 
-# Удаление строк
+# Удаление строк (в памяти)
 delete_lines() {
-    local file="$1"
-    local range="$2"
+    local range="$1"
 
-    if [[ ! -f "$file" ]]; then
-        echo "Ошибка: файл не найден: $file"
-        return 1
-    fi
+    save_state
 
     # Обработка диапазона . (текущая строка)
     if [[ "$range" == "." ]]; then
@@ -479,138 +612,110 @@ delete_lines() {
         fi
     fi
 
+    local new_content=()
+    
     if [[ "$range" =~ ^[0-9]+$ ]]; then
-        sed -i.bak "${range}d" "$file"
+        # Удаление одной строки
+        local line_to_delete=$((range - 1))
+        for ((i=0; i<lineCount; i++)); do
+            if [[ $i -ne $line_to_delete ]]; then
+                new_content+=("${content[i]}")
+            fi
+        done
+        
     elif [[ "$range" =~ ^([0-9]+)\.\.([0-9]+)$ ]]; then
-        local start="${BASH_REMATCH[1]}"
-        local end="${BASH_REMATCH[2]}"
-        sed -i.bak "${start},${end}d" "$file"
+        # Удаление диапазона строк
+        local start=$((BASH_REMATCH[1] - 1))
+        local end=$((BASH_REMATCH[2] - 1))
+        
+        for ((i=0; i<lineCount; i++)); do
+            if [[ $i -lt $start || $i -gt $end ]]; then
+                new_content+=("${content[i]}")
+            fi
+        done
     else
         echo "Ошибка: неверный формат диапазона: $range"
         return 1
     fi
-}
 
-# Редактирование диапазона строк
-edit_range() {
-    local range=$1
-    local file=$2
-    local replace_mode=$3
-
-    # Обработка диапазона . (текущая строка)
-    if [[ "$range" == "." ]]; then
-        range="$((inserty + 1))"
-    fi
-
-    # Обработка диапазона + (вставка после текущей строки)
-    if [[ "$range" == "+" ]]; then
-        insert_line_after "$inserty" "$file"
-        openFile "$file"
-        # Переходим на новую строку и включаем режим вставки
-        ((inserty++))
-        insertx=0
-        insertMode "$file" "normal"
-        return
-    fi
-
-    # Обработка диапазона - (вставка перед текущей строки)
-    if [[ "$range" == "-" ]]; then
-        insert_line_before "$inserty" "$file"
-        openFile "$file"
-        # Остаемся на текущей строке
-        insertx=0
-        return
-    fi
-
-    if [[ $range =~ ^([0-9]+)\.$ ]]; then
-        local line_number=${BASH_REMATCH[1]}
-        local new_text=$(cat)
-        local IFS=$'\n'
-        for line in $new_text; do
-            sed -i "${line_number}a $line" "$file"
-            ((line_number++))
-        done
-
-    elif [[ $range =~ ^([0-9]+)\.\.$ ]]; then
-        local start=${BASH_REMATCH[1]}
-        local new_text=$(cat)
-
-        if [[ $replace_mode == true ]]; then
-            local IFS=$'\n'
-            for line in $new_text; do
-                sed -i "${start}i $line" "$file"
-                ((start++))
-            done
-        else
-            echo
-        fi
-
-    elif [[ $range =~ ^([0-9]+)\.\.([0-9]+)$ ]]; then
-        local start=${BASH_REMATCH[1]}
-        local end=${BASH_REMATCH[2]}
-
-        if [[ -f $file ]]; then
-            if [[ $replace_mode == true ]]; then
-                local new_text=$(cat)
-                sed -i "${start},${end}d" "$file"
-                local IFS=$'\n'
-                for line in $new_text; do
-                    sed -i "${start}i $line" "$file"
-                    ((start++))
-                done
-            else
-                sed -n "${start},${end}p" "$file"
-            fi
-        else
-            echo "Ошибка: файл '$file' не найден."
-        fi
-
-    elif [[ $range =~ ^[0-9]+$ ]]; then
-        local line_number=$range
-        local new_text=$(cat)
-        local tmp_file=$(mktemp)
-        local IFS=$'\n'
-        {
-            sed -n "0,$((line_number - 1))p" "$file"
-            echo "$new_text"
-            sed -n "$((line_number + 1)),\$p" "$file"
-        } >"$tmp_file"
-        mv "$tmp_file" "$file"
-
-    else
-        echo "Ошибка: некорректный формат диапазона."
-    fi
-}
-
-# Обработка команды с выделенным текстом
-process_command_with_selection() {
-    local command="$1"
-    local selected_text="$2"
+    content=("${new_content[@]}")
+    lineCount=${#content[@]}
     
-    # Передаем выделенный текст в команду через пайп
-    echo "$selected_text" | eval "$command"
+    # Корректируем позицию курсора
+    if [[ $inserty -ge $lineCount ]]; then
+        inserty=$((lineCount - 1))
+        if [[ $inserty -lt 0 ]]; then
+            inserty=0
+        fi
+    fi
+    
+    if [[ $lineCount -gt 0 ]]; then
+        current_string="${content[inserty]}"
+        current_string_length=${#current_string}
+        if [[ $insertx -gt $current_string_length ]]; then
+            insertx=$current_string_length
+        fi
+    else
+        current_string=""
+        current_string_length=0
+        insertx=0
+    fi
 }
 
-# Открытие файла
+# Открытие файла в память
 openFile() {
     if [[ -f "$1" ]]; then
         mapfile -t content <"$1"
+        mapfile -t original_content <"$1"
         lineCount=${#content[@]}
+        
+        # Сохраняем начальное состояние в undo stack
+        undo_stack=()
+        redo_stack=()
+        undo_index=0
+        save_state
+        modified=0
     else
         content=()
+        original_content=()
         lineCount=0
+        undo_stack=()
+        redo_stack=()
+        undo_index=0
+        modified=0
     fi
     return 0
+}
+
+# Сохранение файла из памяти
+saveFile() {
+    local save_file="$1"
+    printf "%s\n" "${content[@]}" > "$save_file"
+    if [[ $? -eq 0 ]]; then
+        echo "Файл сохранен: $save_file"
+        modified=0
+        # Обновляем оригинальное содержимое
+        mapfile -t original_content <"$save_file"
+        return 0
+    else
+        echo "Ошибка: не удалось сохранить файл $save_file"
+        return 1
+    fi
 }
 
 # Перерисовка экрана
 rewrite() {
     clear
-    if [[ $visual_mode -eq 1 ]]; then
-        echo "Файл: $original_file | Строк: $lineCount | Курсор: ($insertx, $((inserty + 1))) | VISUAL MODE"
-    else
-        echo "Файл: $original_file | Строк: $lineCount | Курсор: ($insertx, $((inserty + 1)))"
+    local status_line="Файл: $original_file | Строк: $lineCount | Курсор: ($insertx, $((inserty + 1)))"
+    if [[ $insert_mode -eq 1 ]]; then
+        status_line+=" | INSERT MODE"
+    elif [[ $visual_mode -eq 1 ]]; then
+        status_line+=" | VISUAL MODE"
+	else 
+		status_line+=" | NORMAL MODE"
     fi
+
+    echo "$status_line"
     echo "---"
 
     if [[ $lineCount -gt 0 ]]; then
@@ -635,7 +740,7 @@ rewrite() {
         fi
         
         if [[ $i -eq $inserty && $visual_mode -eq 0 ]]; then
-            # В нормальном режиме показываем курсор белым прямоугольником (как в Vim)
+            # В нормальном режиме показываем курсор белым прямоугольником
             echo "$(($i + 1)): $(highlight_char $insertx "${content[i]}")"
         else
             echo "$(($i + 1)): $display_line"
@@ -650,25 +755,24 @@ rewrite() {
     # Статусная строка
     echo "---"
     if [[ $visual_mode -eq 1 ]]; then
-        echo "VISUAL MODE: v - выход, d - удалить выделение, : - команда с выделенным текстом"
-    fi
-}
-
-# Сохранение файла
-saveFile() {
-    if cp "$file" "$1" 2>/dev/null; then
-        echo "Файл сохранен: $1"
+        # echo "VISUAL MODE: v - выход, d - удалить выделение, : - команда с выделенным текстом"
+		echo;
     else
-        echo "Ошибка: не удалось сохранить файл $1"
-        return 1
+        # echo "u - отмена, Ctrl+r - повтор, : - команда, i - вставка, v - визуальный режим"
+		echo;
     fi
 }
 
 # Создание новой строки если файл пустой
 create_first_line_if_empty() {
-    local edit_file="$1"
-    if [[ ! -s "$edit_file" ]]; then
-        echo "" > "$edit_file"
+    if [[ $lineCount -eq 0 ]]; then
+        save_state
+        content=("")
+        lineCount=1
+        current_string=""
+        current_string_length=0
+        insertx=0
+        inserty=0
         return 0
     fi
     return 1
@@ -676,15 +780,12 @@ create_first_line_if_empty() {
 
 # Режим вставки
 insertMode() {
-    local edit_file="$1"
+	insert_mode=1
     local mode="$2"  # normal, begin, after, end
     
     # Создаем первую строку если файл пустой
     if [[ $lineCount -eq 0 ]]; then
-        echo "" > "$edit_file"
-        openFile "$edit_file"
-        inserty=0
-        insertx=0
+        create_first_line_if_empty
     fi
     
     case "$mode" in
@@ -722,6 +823,7 @@ insertMode() {
         local exit_code=$?
         
         if [[ $exit_code -ne 0 ]]; then
+			insert_mode=0
             break
         fi
         
@@ -734,14 +836,14 @@ insertMode() {
                 continue
             else
                 # Это одиночный Escape - выходим
+				insert_mode=0
                 break
             fi
         fi
         
         # Обработка Enter (новая строка)
         if [[ "$char" == $'\n' || "$char" == $'\r' ]]; then
-            insert_newline "$inserty" "$insertx" "$edit_file"
-            openFile "$edit_file"
+            insert_newline "$inserty" "$insertx"
             ((inserty++))
             insertx=0
             continue
@@ -751,15 +853,13 @@ insertMode() {
         if [[ "$char" == $'\x7f' || "$char" == $'\x08' ]]; then
             if [[ $insertx -eq 0 && $inserty -gt 0 ]]; then
                 # Объединяем с предыдущей строкой
-                remove_newline "$inserty" "$edit_file"
-                openFile "$edit_file"
+                remove_newline "$inserty"
                 ((inserty--))
                 current_string="${content[inserty]}"
                 insertx=${#current_string}
             elif [[ $insertx -gt 0 ]]; then
                 # Обычное удаление символа
-                remove_char "$inserty" $((insertx - 1)) "$edit_file"
-                openFile "$edit_file"
+                remove_char "$inserty" $((insertx - 1))
                 ((insertx--))
             fi
             continue
@@ -768,25 +868,20 @@ insertMode() {
         # Обработка Tab
         if [[ "$char" == $'\t' ]]; then
             # Вставляем 4 пробела вместо таба
-            insert_char " " "$inserty" "$insertx" "$edit_file"
-            openFile "$edit_file"
+            insert_char " " "$inserty" "$insertx"
             ((insertx++))
-            insert_char " " "$inserty" "$insertx" "$edit_file"
-            openFile "$edit_file"
+            insert_char " " "$inserty" "$insertx"
             ((insertx++))
-            insert_char " " "$inserty" "$insertx" "$edit_file"
-            openFile "$edit_file"
+            insert_char " " "$inserty" "$insertx"
             ((insertx++))
-            insert_char " " "$inserty" "$insertx" "$edit_file"
-            openFile "$edit_file"
+            insert_char " " "$inserty" "$insertx"
             ((insertx++))
             continue
         fi
         
         # Обработка обычных символов (включая пробел и русские буквы)
         if [[ -n "$char" ]]; then
-            insert_char "$char" "$inserty" "$insertx" "$edit_file"
-            openFile "$edit_file"
+            insert_char "$char" "$inserty" "$insertx"
             ((insertx++))
         fi
     done
@@ -799,10 +894,8 @@ insertMode() {
 
 # Режим удаления
 removeModer() {
-    local edit_file="$1"
     if [[ $lineCount -gt 0 && $current_string_length -gt 0 && $insertx -lt $current_string_length ]]; then
-        remove_char "$inserty" "$insertx" "$edit_file"
-        openFile "$edit_file"
+        remove_char "$inserty" "$insertx"
         # Курсор остается на месте после удаления
         rewrite
     fi
@@ -810,7 +903,6 @@ removeModer() {
 
 # Поиск символа вперед (f)
 find_char_forward() {
-    local edit_file="$1"
     if [[ $lineCount -eq 0 ]]; then
         return
     fi
@@ -848,7 +940,6 @@ find_char_forward() {
 
 # Поиск символа назад (F)
 find_char_backward() {
-    local edit_file="$1"
     if [[ $lineCount -eq 0 ]]; then
         return
     fi
@@ -885,7 +976,6 @@ find_char_backward() {
 
 # Поиск до символа вперед (t)
 find_till_char_forward() {
-    local edit_file="$1"
     if [[ $lineCount -eq 0 ]]; then
         return
     fi
@@ -926,7 +1016,6 @@ find_till_char_forward() {
 
 # Поиск до символа назад (T)
 find_till_char_backward() {
-    local edit_file="$1"
     if [[ $lineCount -eq 0 ]]; then
         return
     fi
@@ -1200,7 +1289,7 @@ visualMode() {
                 
                 insertx=$temp_x
                 inserty=$temp_y
-                find_char_forward "$file"
+                find_char_forward
                 
                 visual_end_x=$insertx
                 visual_end_y=$inserty
@@ -1212,7 +1301,7 @@ visualMode() {
                 
                 insertx=$temp_x
                 inserty=$temp_y
-                find_char_backward "$file"
+                find_char_backward
                 
                 visual_end_x=$insertx
                 visual_end_y=$inserty
@@ -1224,7 +1313,7 @@ visualMode() {
                 
                 insertx=$temp_x
                 inserty=$temp_y
-                find_till_char_forward "$file"
+                find_till_char_forward
                 
                 visual_end_x=$insertx
                 visual_end_y=$inserty
@@ -1236,7 +1325,7 @@ visualMode() {
                 
                 insertx=$temp_x
                 inserty=$temp_y
-                find_till_char_backward "$file"
+                find_till_char_backward
                 
                 visual_end_x=$insertx
                 visual_end_y=$inserty
@@ -1267,8 +1356,7 @@ visualMode() {
                 ;;
             "d")
                 # Удаление выделенного текста
-                delete_selected_text "$visual_start_y" "$visual_start_x" "$visual_end_y" "$visual_end_x" "$file"
-                openFile "$file"
+                delete_selected_text "$visual_start_y" "$visual_start_x" "$visual_end_y" "$visual_end_x"
                 visual_mode=0
                 # Устанавливаем курсор в начало выделения
                 inserty=$visual_start_y
@@ -1296,80 +1384,53 @@ visualMode() {
     insertx=$visual_end_x
 }
 
+process_command_with_selection() {
+    local cmd="$1"
+    local selected_text="$2"
+    
+    # Выполняем команду с выделенным текстом
+    if [[ -n "$cmd" ]]; then
+        echo "$selected_text" | eval "$cmd" 2>/dev/null || echo "Ошибка выполнения команды: $cmd"
+    fi
+}
+
+q() {
+	exit;
+}
+
+w() {
+	saveFile "$original_file"
+}
+
+wq() {
+	saveFile "$original_file"
+	exit;
+}
+
 # Режим команд
 commandMode() {
     read -p ":" cmd
-    case "$cmd" in
-        "w"|"write")
-            saveFile "$original_file"
-            ;;
-        "q"|"quit")
-            echo "Выход из редактора"
-            exit 0
-            ;;
-        "wq")
-            saveFile "$original_file"
-            echo "Выход из редактора"
-            exit 0
-            ;;
-        "")
-            ;;
-        *)
-            if [[ -n "$cmd" ]]; then
-                eval "$cmd" 2>/dev/null || echo "Ошибка выполнения команды: $cmd"
-                read -n1 -p "Нажмите любую клавишу для продолжения..."
-            fi
-            ;;
-    esac
-}
-
-# Редактирование строк
-edit() {
-    local edit_file="$1"
-    read -p "Диапазон для редактирования: " range
-    if [[ -n "$range" ]]; then
-        clear
-        edit_range "$range" "$edit_file" true
-        openFile "$edit_file"
-    fi
-}
-
-# Удаление строк
-del() {
-    local edit_file="$1"
-    read -p "Диапазон для удаления: " range
-    if [[ -n "$range" ]]; then
-        delete_lines "$edit_file" "$range"
-        openFile "$edit_file"
-        # Корректировка позиции курсора
-        if [[ $inserty -ge $lineCount ]]; then
-            inserty=$((lineCount - 1))
-            if [[ $inserty -lt 0 ]]; then
-                inserty=0
-            fi
-        fi
-    fi
+	eval "$cmd" 2>/dev/null || echo "Ошибка выполнения команды: $cmd"
+	read -n1 -p "Нажмите любую клавишу для продолжения..."
 }
 
 # Создание новой строки ниже (как o в Vim)
 create_line_below() {
-    local edit_file="$1"
-    insert_line_after "$inserty" "$edit_file"
-    openFile "$edit_file"
+    save_state
+    insert_line_after "$inserty"
     # Переходим на новую строку и включаем режим вставки
     ((inserty++))
     insertx=0
-    insertMode "$edit_file" "normal"
+    insertMode "normal"
 }
 
 # Создание новой строки выше (как O в Vim)
 create_line_above() {
-    local edit_file="$1"
-    insert_line_before "$inserty" "$edit_file"
-    openFile "$edit_file"
+    save_state
+    insert_line_before "$inserty"
     # Переходим на новую строку и включаем режим вставки
     insertx=0
-    insertMode "$edit_file" "normal"
+    insertMode "normal"
 }
 
 # Переход в начало строки
@@ -1389,17 +1450,15 @@ goto_line_end() {
 
 # Создание строки ниже (в нормальном режиме)
 create_line_below_normal() {
-    local edit_file="$1"
-    insert_line_after "$inserty" "$edit_file"
-    openFile "$edit_file"
+    save_state
+    insert_line_after "$inserty"
     # Остаемся на текущей строке
 }
 
 # Создание строки выше (в нормальном режиме)
 create_line_above_normal() {
-    local edit_file="$1"
-    insert_line_before "$inserty" "$edit_file"
-    openFile "$file"
+    save_state
+    insert_line_before "$inserty"
     # Переходим на новую строку
     ((inserty++))
 }
@@ -1407,15 +1466,7 @@ create_line_above_normal() {
 # Основной цикл редактора
 main() {
     original_file="$1"
-    local temp_file=$(mktemp)
-    
-    if ! cp "$original_file" "$temp_file" 2>/dev/null; then
-        echo "Ошибка: не удалось создать временный файл"
-        return 1
-    fi
-    
-    file="$temp_file"
-    openFile "$file" || return
+    openFile "$original_file" || return
 
     startLine=0
     linesPerPage=$(($(tput lines) - 6))
@@ -1451,9 +1502,16 @@ main() {
                 fi
                 ;;
             ":") commandMode ;;
-            "e") edit "$file" && lineCount=${#content[@]} ;;
-            "d") del "$file" && lineCount=${#content[@]} ;;
+            "d") 
+                echo -n "Диапазон для удаления: "
+                read range
+                if [[ -n "$range" ]]; then
+                    delete_lines "$range"
+                fi
+                ;;
             "v") visualMode ;;
+            "u") undo ;;
+            $'\x12') redo ;; # Ctrl+R для redo
             "h") 
                 if [[ $insertx -gt 0 ]]; then 
                     ((insertx--))
@@ -1503,32 +1561,29 @@ main() {
                     adjust_scroll_to_cursor
                 fi
                 ;;
-            "i") insertMode "$file" "normal" ;;
-            "I") insertMode "$file" "begin" ;;   # В начале строки
-            "a") insertMode "$file" "after" ;;    # После курсора
-            "A") insertMode "$file" "end" ;;      # В конце строки
-            "D") removeModer "$file" ;;
-            "o") create_line_below "$file" ;;     # Новая строка ниже + insert mode
-            "O") create_line_above "$file" ;;     # Новая строка выше + insert mode
-            "0") goto_line_begin ;;               # Начало строки
-            "$") goto_line_end ;;                 # Конец строки
-            "+") create_line_below_normal "$file" ;; # Новая строка ниже (normal mode)
-            "-") create_line_above_normal "$file" ;; # Новая строка выше (normal mode)
-            "f") find_char_forward "$file" ;;     # Поиск символа вперед
-            "F") find_char_backward "$file" ;;    # Поиск символа назад
-            "t") find_till_char_forward "$file" ;; # Поиск до символа вперед
-            "T") find_till_char_backward "$file" ;; # Поиск до символа назад
-            "g") goto_line ;;                     # Переход к строке
-            "G") goto_end ;;                      # Переход в конец файла
-            "w") next_word ;;                     # Следующее слово
-            "b") prev_word ;;                     # Предыдущее слово
+            "i") insertMode "normal" ;;
+            "I") insertMode "begin" ;;   # В начале строки
+            "a") insertMode "after" ;;    # После курсора
+            "A") insertMode "end" ;;      # В конце строки
+            "D") removeModer ;;
+            "o") create_line_below ;;     # Новая строка ниже + insert mode
+            "O") create_line_above ;;     # Новая строка выше + insert mode
+            "0") goto_line_begin ;;       # Начало строки
+            "$") goto_line_end ;;         # Конец строки
+            "+") create_line_below_normal ;; # Новая строка ниже (normal mode)
+            "-") create_line_above_normal ;; # Новая строка выше (normal mode)
+            "f") find_char_forward ;;     # Поиск символа вперед
+            "F") find_char_backward ;;    # Поиск символа назад
+            "t") find_till_char_forward ;; # Поиск до символа вперед
+            "T") find_till_char_backward ;; # Поиск до символа назад
+            "g") goto_line ;;             # Переход к строке
+            "G") goto_end ;;              # Переход в конец файла
+            "w") next_word ;;             # Следующее слово
+            "b") prev_word ;;             # Предыдущее слово
         esac
 
         norewrite=0
     done
-
-    # Очистка временного файла
-    rm -f "$temp_file"
 }
 
 # Основная функция
