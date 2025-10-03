@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# FEP (File Editor Plus) - простой текстовый редактор
 # Конфигурационные файлы
 CONFIG_DIR="$HOME/.config/fep"
 START_CONFIG="$CONFIG_DIR/start"
@@ -41,11 +40,32 @@ get_selected_text() {
     local start_y=$1 start_x=$2 end_y=$3 end_x=$4
     local selected_text=""
     
-    if [[ $start_y -eq $end_y ]]; then
+    # Нормализуем координаты для правильного выделения
+    local sel_start_y=$start_y
+    local sel_start_x=$start_x
+    local sel_end_y=$end_y
+    local sel_end_x=$end_x
+    
+    if [[ $sel_start_y -gt $sel_end_y ]]; then
+        # Меняем местами если начало после конца
+        local temp_y=$sel_start_y
+        sel_start_y=$sel_end_y
+        sel_end_y=$temp_y
+        local temp_x=$sel_start_x
+        sel_start_x=$sel_end_x
+        sel_end_x=$temp_x
+    elif [[ $sel_start_y -eq $sel_end_y && $sel_start_x -gt $sel_end_x ]]; then
+        # В одной строке, но начало после конца
+        local temp_x=$sel_start_x
+        sel_start_x=$sel_end_x
+        sel_end_x=$temp_x
+    fi
+    
+    if [[ $sel_start_y -eq $sel_end_y ]]; then
         # Выделение в одной строке
-        local line="${content[start_y]}"
-        local start_pos=$start_x
-        local end_pos=$end_x
+        local line="${content[sel_start_y]}"
+        local start_pos=$sel_start_x
+        local end_pos=$sel_end_x
         if [[ $start_pos -gt $end_pos ]]; then
             local temp=$start_pos
             start_pos=$end_pos
@@ -54,28 +74,19 @@ get_selected_text() {
         selected_text="${line:start_pos:end_pos-start_pos}"
     else
         # Многострочное выделение
-        if [[ $start_y -gt $end_y ]]; then
-            local temp_y=$start_y
-            start_y=$end_y
-            end_y=$temp_y
-            local temp_x=$start_x
-            start_x=$end_x
-            end_x=$temp_x
-        fi
-        
         # Первая строка
-        local first_line="${content[start_y]}"
-        selected_text="${first_line:start_x}"
+        local first_line="${content[sel_start_y]}"
+        selected_text="${first_line:sel_start_x}"
         
         # Промежуточные строки
-        for ((i = start_y + 1; i < end_y; i++)); do
+        for ((i = sel_start_y + 1; i < sel_end_y; i++)); do
             selected_text+=$'\n'"${content[i]}"
         done
         
         # Последняя строка
-        local last_line="${content[end_y]}"
-        if [[ $end_x -gt 0 ]]; then
-            selected_text+=$'\n'"${last_line:0:end_x}"
+        local last_line="${content[sel_end_y]}"
+        if [[ $sel_end_x -gt 0 ]]; then
+            selected_text+=$'\n'"${last_line:0:sel_end_x}"
         fi
     fi
     
@@ -86,11 +97,30 @@ get_selected_text() {
 delete_selected_text() {
     local start_y=$1 start_x=$2 end_y=$3 end_x=$4 file=$5
     
-    if [[ $start_y -eq $end_y ]]; then
+    # Нормализуем координаты для правильного удаления
+    local del_start_y=$start_y
+    local del_start_x=$start_x
+    local del_end_y=$end_y
+    local del_end_x=$end_x
+    
+    if [[ $del_start_y -gt $del_end_y ]]; then
+        local temp_y=$del_start_y
+        del_start_y=$del_end_y
+        del_end_y=$temp_y
+        local temp_x=$del_start_x
+        del_start_x=$del_end_x
+        del_end_x=$temp_x
+    elif [[ $del_start_y -eq $del_end_y && $del_start_x -gt $del_end_x ]]; then
+        local temp_x=$del_start_x
+        del_start_x=$del_end_x
+        del_end_x=$temp_x
+    fi
+    
+    if [[ $del_start_y -eq $del_end_y ]]; then
         # Удаление в одной строке
-        local line="${content[start_y]}"
-        local start_pos=$start_x
-        local end_pos=$end_x
+        local line="${content[del_start_y]}"
+        local start_pos=$del_start_x
+        local end_pos=$del_end_x
         if [[ $start_pos -gt $end_pos ]]; then
             local temp=$start_pos
             start_pos=$end_pos
@@ -99,32 +129,23 @@ delete_selected_text() {
         
         # Создаем новую строку без выделенного фрагмента
         local new_line="${line:0:start_pos}${line:end_pos}"
-        replace_line "$start_y" "$new_line" "$file"
+        replace_line "$del_start_y" "$new_line" "$file"
         
     else
         # Многострочное удаление
-        if [[ $start_y -gt $end_y ]]; then
-            local temp_y=$start_y
-            start_y=$end_y
-            end_y=$temp_y
-            local temp_x=$start_x
-            start_x=$end_x
-            end_x=$temp_x
-        fi
-        
         local temp_file=$(mktemp)
         local current_line=0
         
         while IFS= read -r line; do
-            if [[ $current_line -eq $start_y ]]; then
+            if [[ $current_line -eq $del_start_y ]]; then
                 # Первая строка выделения - обрезаем с конца
-                echo "${line:0:start_x}" >> "$temp_file"
-            elif [[ $current_line -eq $end_y ]]; then
+                echo "${line:0:del_start_x}" >> "$temp_file"
+            elif [[ $current_line -eq $del_end_y ]]; then
                 # Последняя строка выделения - обрезаем с начала
-                if [[ $end_x -lt ${#line} ]]; then
-                    echo "${line:end_x}" >> "$temp_file"
+                if [[ $del_end_x -lt ${#line} ]]; then
+                    echo "${line:del_end_x}" >> "$temp_file"
                 fi
-            elif [[ $current_line -lt $start_y || $current_line -gt $end_y ]]; then
+            elif [[ $current_line -lt $del_start_y || $current_line -gt $del_end_y ]]; then
                 # Строки вне выделения
                 echo "$line" >> "$temp_file"
             fi
@@ -332,34 +353,30 @@ replace_char_in_line() {
 
     mv "$temp_file" "$file"
 }
-
-# Подсветка символа под курсором
+# Подсветка символа под курсором (белая заливка как в visual mode)
 highlight_char() {
     local index="$1"
     shift
     local string="$*"
 
-    if [ "$index" -gt "${#string}" ] || [ "$index" -lt 0 ]; then
+    if [ "$index" -lt 0 ]; then
         echo "Ошибка: индекс $index вне диапазона строки."
         return 1
     fi
 
-    # Символы для отображения
-    local red_square='■'
-    local red='\033[0;31m'
+    # Инверсный цвет (белая заливка) для курсора
+    local invert='\033[7m'
     local reset='\033[0m'
 
-    if [ "$index" -eq "${#string}" ]; then
-        echo -e "${string}${red}${red_square}${reset}"
+    if [ "$index" -ge "${#string}" ]; then
+        # Курсор в конце строки - показываем пробел с инверсным цветом
+        echo -e "${string}${invert} ${reset}"
         return 0
     fi
 
+    # Курсор на символе - инвертируем цвет символа
     local char_to_highlight="${string:$index:1}"
-    if [ "$char_to_highlight" == " " ]; then
-        char_to_highlight="$red_square"
-    fi
-
-    local highlighted_string="${string:0:index}${red}${char_to_highlight}${reset}${string:index+1}"
+    local highlighted_string="${string:0:index}${invert}${char_to_highlight}${reset}${string:index+1}"
     echo -e "$highlighted_string"
 }
 
@@ -370,27 +387,36 @@ highlight_selection() {
     local start_y=$3 start_x=$4 end_y=$5 end_x=$6
     
     # Нормализуем координаты выделения
-    if [[ $start_y -gt $end_y ]]; then
-        local temp_y=$start_y
-        start_y=$end_y
-        end_y=$temp_y
-        local temp_x=$start_x
-        start_x=$end_x
-        end_x=$temp_x
+    local vis_start_y=$start_y
+    local vis_start_x=$start_x
+    local vis_end_y=$end_y
+    local vis_end_x=$end_x
+    
+    if [[ $vis_start_y -gt $vis_end_y ]]; then
+        local temp_y=$vis_start_y
+        vis_start_y=$vis_end_y
+        vis_end_y=$temp_y
+        local temp_x=$vis_start_x
+        vis_start_x=$vis_end_x
+        vis_end_x=$temp_x
+    elif [[ $vis_start_y -eq $vis_end_y && $vis_start_x -gt $vis_end_x ]]; then
+        local temp_x=$vis_start_x
+        vis_start_x=$vis_end_x
+        vis_end_x=$temp_x
     fi
     
-    # Цвета для выделения
+    # Цвета для выделения (синий фон)
     local highlight='\033[48;5;24m'
     local reset='\033[0m'
     
     # Если строка не входит в выделение
-    if [[ $line_number -lt $start_y || $line_number -gt $end_y ]]; then
+    if [[ $line_number -lt $vis_start_y || $line_number -gt $vis_end_y ]]; then
         echo "$string"
         return
     fi
     
-    # Если вся строка выделена
-    if [[ $line_number -gt $start_y && $line_number -lt $end_y ]]; then
+    # Если вся строка выделена (промежуточные строки)
+    if [[ $line_number -gt $vis_start_y && $line_number -lt $vis_end_y ]]; then
         echo -e "${highlight}${string}${reset}"
         return
     fi
@@ -398,24 +424,24 @@ highlight_selection() {
     local result=""
     
     # Первая строка выделения
-    if [[ $line_number -eq $start_y ]]; then
-        if [[ $line_number -eq $end_y ]]; then
+    if [[ $line_number -eq $vis_start_y ]]; then
+        if [[ $line_number -eq $vis_end_y ]]; then
             # Выделение в пределах одной строки
-            local left_part="${string:0:start_x}"
-            local middle_part="${string:start_x:end_x-start_x}"
-            local right_part="${string:end_x}"
+            local left_part="${string:0:vis_start_x}"
+            local middle_part="${string:vis_start_x:vis_end_x-vis_start_x}"
+            local right_part="${string:vis_end_x}"
             result="${left_part}${highlight}${middle_part}${reset}${right_part}"
         else
             # Выделение от start_x до конца строки
-            local left_part="${string:0:start_x}"
-            local right_part="${string:start_x}"
+            local left_part="${string:0:vis_start_x}"
+            local right_part="${string:vis_start_x}"
             result="${left_part}${highlight}${right_part}${reset}"
         fi
     # Последняя строка выделения
-    elif [[ $line_number -eq $end_y ]]; then
+    elif [[ $line_number -eq $vis_end_y ]]; then
         # Выделение от начала до end_x
-        local left_part="${string:0:end_x}"
-        local right_part="${string:end_x}"
+        local left_part="${string:0:vis_end_x}"
+        local right_part="${string:vis_end_x}"
         result="${highlight}${left_part}${reset}${right_part}"
     fi
     
@@ -575,7 +601,6 @@ openFile() {
     fi
     return 0
 }
-
 # Перерисовка экрана
 rewrite() {
     clear
@@ -608,6 +633,7 @@ rewrite() {
         fi
         
         if [[ $i -eq $inserty && $visual_mode -eq 0 ]]; then
+            # В нормальном режиме показываем курсор белым прямоугольником (как в Vim)
             echo "$(($i + 1)): $(highlight_char $insertx "${content[i]}")"
         else
             echo "$(($i + 1)): $display_line"
@@ -1007,6 +1033,9 @@ visualMode() {
                     # Переход на предыдущую строку
                     ((visual_end_y--))
                     visual_end_x=${#content[visual_end_y]}
+                    if [[ $visual_end_x -lt 0 ]]; then
+                        visual_end_x=0
+                    fi
                 fi
                 ;;
             "l")
